@@ -4,6 +4,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from config import API
 from BotController import ruWeekdays, ruMonths
 
+# переменная, хранящая текущую функцию, требующую ответа от пользователя
 STATE = None
 
 
