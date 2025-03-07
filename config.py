@@ -1,2 +1,3 @@
 # HTTP API вашего бота
-API = "..."
+API = "8028956692:AAFIcFsEhUET4HyfciB9COIV60m0HCRoShE"
+baruh = 287597756

@@ -2,12 +2,15 @@ import datetime
 import os
 import sqlite3
 
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler
 from config import API
 from BotController import ruWeekdays, ruMonths
 
 # переменная, хранящая текущую функцию, требующую ответа от пользователя
 STATE = None
+
+# этапы для ConversationHandler
+NAME, DEPARTMENT, BIRTHDATE = range(3)
 
 # функция для инициализации базы данных
 def init_db():
@@ -24,6 +27,19 @@ def init_db():
     conn.commit()
     conn.close()
 
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            department TEXT,
+            birthdate TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
 # функция для логирования запросов
 def log_request(user_id, command):
     conn = sqlite3.connect('log.db')
@@ -34,6 +50,26 @@ def log_request(user_id, command):
     ''', (datetime.datetime.now(), user_id, command))
     conn.commit()
     conn.close()
+
+# функция для добавления пользователя в базу данных
+def add_user(name, department, birthdate):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO users (name, department, birthdate)
+        VALUES (?, ?, ?)
+    ''', (name, department, birthdate))
+    conn.commit()
+    conn.close()
+
+# функция для получения пользователей из базы данных
+def get_users():
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT name, department, birthdate FROM users')
+    users = cursor.fetchall()
+    conn.close()
+    return users
 
 # функция, которая обрабатывает start
 async def start(update, context):
@@ -47,6 +83,8 @@ async def start(update, context):
 <a>/day_of_week</a> - на какой день недели приходится введённая дата.
 <a>/days_from</a> - сколько дней прошло с введённой даты до сегодняшнего дня.
 <a>/days_before</a> - сколько дней осталось до введённой даты, начиная с сегодняшнего дня.
+<a>/user</a> - добавить пользователя в базу данных.
+<a>/users</a> - вывести таблицу с добавленными пользователями.
 
 Чтобы начать, просто введи одну из команд выше. Если у тебя возникнут вопросы, не стесняйся спрашивать! """,
                                     parse_mode='HTML')
@@ -159,6 +197,49 @@ async def get_days_before(update, context):
     except ValueError:
         await update.message.reply_text("Неверный формат даты, попробуйте еще раз:")
 
+# функция, которая обрабатывает команду /user
+async def user(update, context):
+    log_request(update.message.from_user.id, "/user")
+    await update.message.reply_text('Введите ваше ФИО:')
+    return NAME
+
+# функция для получения ФИО
+async def get_name(update, context):
+    context.user_data['name'] = update.message.text
+    await update.message.reply_text('Введите ваш отдел:')
+    return DEPARTMENT
+
+# функция для получения отдела
+async def get_department(update, context):
+    context.user_data['department'] = update.message.text
+    await update.message.reply_text('Введите вашу дату рождения (ДД.ММ.ГГГГ):')
+    return BIRTHDATE
+
+# функция для получения даты рождения и добавления пользователя в базу данных
+async def get_birthdate(update, context):
+    context.user_data['birthdate'] = update.message.text
+    add_user(context.user_data['name'], context.user_data['department'], context.user_data['birthdate'])
+    await update.message.reply_text('Пользователь успешно добавлен в базу данных!')
+    return ConversationHandler.END
+
+# функция для отмены добавления пользователя
+async def cancel(update, context):
+    await update.message.reply_text('Добавление пользователя отменено.')
+    return ConversationHandler.END
+
+# функция, которая обрабатывает команду /users
+async def users(update, context):
+    log_request(update.message.from_user.id, "/users")
+    users = get_users()
+    if not users:
+        await update.message.reply_text('Пользователи не найдены.')
+        return
+
+    response = '<b>Список пользователей:</b>\n\n'
+    for user in users:
+        response += f'ФИО: {user[0]}\nОтдел: {user[1]}\nДата рождения: {user[2]}\n\n'
+    await update.message.reply_text(response, parse_mode='HTML')
+
 def main():
     init_db()
     application = Application.builder().token(API).build()
@@ -173,6 +254,20 @@ def main():
     get_days_from_command_handler = CommandHandler("days_from", get_days_from)
     get_days_before_handler = CommandHandler("days_before", get_days_before)
 
+    # обработчик для команды /user
+    user_handler = ConversationHandler(
+        entry_points=[CommandHandler('user', user)],
+        states={
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            DEPARTMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_department)],
+            BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_birthdate)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+
+    # обработчик для команды /users
+    users_command_handler = CommandHandler("users", users)
+
     # универсальный геттер текста
     user_input_handler = MessageHandler(filters.TEXT, get_user_input)
 
@@ -183,6 +278,8 @@ def main():
     application.add_handler(get_day_of_week_command_handler)
     application.add_handler(get_days_from_command_handler)
     application.add_handler(get_days_before_handler)
+    application.add_handler(user_handler)
+    application.add_handler(users_command_handler)
 
     # геттер пользовательского ввода
     application.add_handler(user_input_handler)
